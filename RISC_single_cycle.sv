@@ -27,22 +27,25 @@ module RISC_single_cycle(input logic clk);
 	logic regWEn;
 	logic [2:0]Imm_Sel;
 	logic PCSel;
+	logic [2:0]load_type;
+	logic [31:0]load_result;
 	//Module instance//
 	PC 				PC_instance (.clk(clk),.data_in(PC_in),.data_out(PC_out),.Write_enable(PC_WE));
 	IMEM				IMEM_instance (.addr(PC_out),.inst(inst));
-	reg_file 		regfile_instance (.clk(clk),.data_W(WBSel_out),.rsW(inst_rsw),.rs1(inst_rs1),.rs2(inst_rs2),.data_1(data_1),.data_2(data_2),.regWEn(regWEn));
+	regfile 		   regfile_instance (.clk(clk),.data_W(WBSel_out),.rsW(inst_rsw),.rs1(inst_rs1),.rs2(inst_rs2),.data_1(data_1),.data_2(data_2),.regWEn(regWEn));
 	ALU 				ALU_instance (.A(ALU_A),.B(ALU_B),.ALU_out(ALU_out),.ALU_sel(ALU_sel));
 	Imm_Gen  		Imm_Gen_instance (.Imm_out(Imm_out),.Imm_Sel(Imm_Sel),.inst(inst));
 	DMEM 				DMEM_instance (.addr(ALU_out),.clk(clk),.MemRW(MemRW),.dataW(data_2),.dataR(dataR_DMEM));
 	Add_Sub_32bit 	PC_add4 (.A(PC_out),.B(32'd4),.Sel(1'b0),.Result(PC_add4_out));
-	MUX4to1			Writeback (.sel(WBSel),.in0(dataR_DMEM),.in1(ALU_out),.in2(PC_add4_out),.out(WBSel_out));
-	Branch_compare Branch_compare_instance (.BrUn(BrUn),.data_1(data_1),.data_2(data_2),.BrLt(BrLt),.BrEq(BrEq));
-	Control_unit 	Control_unit_instance (.inst(inst),.BrEq(BrEq),.BrLt(BrLt),.PCSel(PCSel),.Imm_Sel(Imm_Sel),.regWEn(regWEn),.BrUn(BrUn),.Asel(Asel),.Bsel(Bsel),.ALU_sel(ALU_sel),.MemRW(MemRW),.WBSel(WBSel));
-	
+	MUX4to1			Writeback (.sel(WBSel),.in0(load_result),.in1(ALU_out),.in2(PC_add4_out),.out(WBSel_out));
+	brc brc_instance (.BrUn(BrUn),.data_1(data_1),.data_2(data_2),.BrLt(BrLt),.BrEq(BrEq));
+	Control_unit 	Control_unit_instance (.inst(inst),.BrEq(BrEq),.BrLt(BrLt),.PCSel(PCSel),.Imm_Sel(Imm_Sel),.regWEn(regWEn),.BrUn(BrUn),.Asel(Asel),.Bsel(Bsel),.ALU_sel(ALU_sel),.MemRW(MemRW),.WBSel(WBSel),.load_type(load_type));
+	Load_encode 	Load_encode_instance (.load_data(dataR_DMEM),.load_type(load_type),.load_result(load_result));
 	assign ALU_A = Asel ? PC_out: data_1;
 	assign ALU_B = Bsel ? Imm_out: data_2;
 	assign PC_in = PCSel ? ALU_out: PC_add4_out;	
 endmodule
+
 
 ///Control Unit//////
 module Control_unit(
@@ -57,6 +60,7 @@ module Control_unit(
 	output logic Asel,
 	output logic [3:0]ALU_sel,
 	output logic MemRW,
+	output logic [2:0]load_type,
 	output logic [1:0]WBSel);
 	
 	logic [6:0] opcode;
@@ -78,6 +82,7 @@ module Control_unit(
         ALU_sel = 4'b0000;
         MemRW   = 1'b0;
         WBSel   = 2'b00;
+		  load_type = 3'b0;
 		case (opcode)
 
 			7'b0110011: begin  // R-type 
@@ -85,6 +90,7 @@ module Control_unit(
             WBSel   = 2'b1;// chọn write back từ ngõ ra ALU
             Asel    = 1'b0;// chọn A từ rs1
             Bsel    = 1'b0;//chọn B từ rs2
+				load_type = 3'b0; //không load
 				case(funct3)
 					3'b000: ALU_sel = (inst[30]) ? 4'b1000 : 4'b0000; // SUB nếu inst[30] = 1, ADD nếu inst[30] = 0
 					3'b001: ALU_sel = 4'b0001; // SLL
@@ -106,6 +112,7 @@ module Control_unit(
             Bsel    = 1'b1;	
 				Imm_Sel = 3'b000;
 				MemRW   = 1'b0;	// Cho phép đọc đọc DMEM
+				load_type = 3'b0; // không load
 				case(funct3)
 					3'b000: ALU_sel = 4'b0000; // ADDI
 					3'b001: ALU_sel = 4'b0001; // SLLI
@@ -120,20 +127,28 @@ module Control_unit(
 				end
 				
 			7'b0000011: begin  // Load
-			   regWEn  = 1'b1; // Cho phép ghi lại vào Reg_file
+			   regWEn  = 1'b1; // Cho phép ghi lại vào regfile
             WBSel   = 2'b0; // Lấy dữ liệu từ DMEM
             Asel    = 1'b0; // Chọn Rs1 + Imm_Gen
             Bsel    = 1'b1; // Chọn Imm_Gen
 				Imm_Sel = 3'b000;	// Imm_Gen theo I type
 				ALU_sel = 4'b0000;	// Thực hiện phép cộng
 				MemRW   = 1'b0;	// Cho phép đọc đọc DMEM
+				case(funct3)
+					3'b000: load_type = 3'b000;
+					3'b001: load_type = 3'b001;
+					3'b010: load_type = 3'b010;
+					3'b100: load_type = 3'b100;					
+					3'b101: load_type = 3'b101;					
+					default: load_type = 3'b111;
+				endcase
 			end
 			
 			7'b0100011: begin //	S-type
 				Imm_Sel = 3'b001;	// Imm_Gen theo S type
 				regWEn = 1'b0; //không cho ghi lại vào reg file
 				Asel = 1'b0; //chọn A là rs1 
-				Bsel = 1'b0; //chọn B là Imm_Gen theo S type
+				Bsel = 1'b1; //chọn B là Imm_Gen theo S type
 				MemRW = 1'b1; //cho phép đọc và ghi DMEM
 				ALU_sel = 4'b0000;	// Thực hiện phép cộng
 				WBSel = 2'b11; //write back là tùy định vì không ghi ngược lại vào regfile
@@ -227,7 +242,7 @@ end
 endmodule
 
 //////////Register File ///////////////////////
-module reg_file(
+module regfile(
 	input logic clk, regWEn,
 	input logic [31:0]data_W,
 	input logic [4:0]rsW,
@@ -239,13 +254,14 @@ module reg_file(
 	logic [31:0]reg_mem[31:0];
 	
 	always_ff @(posedge clk) begin
-		if(regWEn && rsW != 5'd0) begin
+		if(regWEn && rsW != 5'd0)
 			reg_mem[rsW] <= data_W;
-			//reg_mem[0] <= 32'b0;
-		end
+		else reg_mem[0] <= 32'b0;
+	
 	end
 	assign data_1 = reg_mem[rs1];
 	assign data_2 = reg_mem[rs2];
+	
 endmodule
 
 ///////Instruction Memory ////////////////////////	
@@ -256,12 +272,11 @@ module IMEM (
 	output logic [4:0]inst_rs1,
 	output logic [4:0]inst_rs2);
 	
-	logic [31:0] memory [0:1024]; 
-	
-	assign inst = memory[addr[31:2]];
-	assign inst_rsw = memory[addr[31:2]][11:7];
-	assign inst_rs1 = memory[addr[31:2]][19:15];
-	assign inst_rs2 = memory[addr[31:2]][24:20];	
+	logic [31:0] memory [0:256];
+	assign inst = memory[addr[31:0]];
+	assign inst_rsw = memory[addr[31:0]][11:7];
+	assign inst_rs1 = memory[addr[31:0]][19:15];
+	assign inst_rs2 = memory[addr[31:0]][24:20];	
 endmodule
 
 ///////Data Memory ////////////////////////
@@ -279,7 +294,25 @@ module DMEM(
 	end
 	assign dataR = memory[addr];
 endmodule	
+////////Load Encoding/////
+module Load_encode (
+    input  logic [31:0] load_data,  // Dữ liệu 32-bit đọc từ bộ nhớ
+    input  logic [2:0]  load_type,  // Loại load (000=LB, 001=LH, 010=LW, 100=LBU, 101=LHU)
+    output logic [31:0] load_result // Dữ liệu sau khi xử lý
+);
 
+    always_comb begin
+        case (load_type)
+            3'b000: load_result = {{24{load_data[7]}}, load_data[7:0]};  // LB (mở rộng dấu từ byte)
+            3'b001: load_result = {{16{load_data[15]}}, load_data[15:0]}; // LH (mở rộng dấu từ halfword)
+            3'b010: load_result = load_data;  // LW (giữ nguyên)
+            3'b100: load_result = {24'b0, load_data[7:0]};  // LBU (mở rộng zero từ byte)
+            3'b101: load_result = {16'b0, load_data[15:0]}; // LHU (mở rộng zero từ halfword)
+            default: load_result = 32'b0;  // Mặc định: 0 (xử lý lỗi)
+        endcase
+    end
+
+endmodule
 /////////Immediate generator///////////////
 module Imm_Gen(	
 	input logic [2:0] Imm_Sel,
@@ -294,16 +327,16 @@ module Imm_Gen(
 always_comb begin
 	case(Imm_Sel) 
 		3'b000: begin //I typte
-			Imm_out = {{20{inst[31]}}, inst[30:20]};
+          Imm_out = {{20{inst[31]}}, inst[31:20]};
 		end
 		3'b001: begin // S type
-			Imm_out = {{20{inst[31]}}, inst[30:25], inst[11:7]};
+          Imm_out = {{20{inst[31]}}, inst[31:25], inst[11:7]};
 		end
 		3'b010: begin //B type
-			Imm_out = {{19{inst[31]}}, inst[7],inst[30:25], inst[11:8],1'b0};
+          Imm_out = {{20{inst[31]}}, inst[7],inst[30:25], inst[11:8],1'b0};
 		end
 		3'b011: begin // J type JAL
-			Imm_out = {{11{inst[31]}}, inst[31], inst[19:12], inst[20], inst[30:21], 1'b0};
+          Imm_out = {{11{inst[31]}}, inst[31], inst[19:12], inst[20], inst[30:21], 1'b0};
 		end
 		3'b100: begin // U type LUI
 			Imm_out = {inst[31:12], 12'b0};
@@ -563,7 +596,7 @@ module MUX4to1 (
     end
 endmodule
 	
-module Branch_compare (
+module brc (
     input logic BrUn,            // 1: so sánh unsigned, 0: so sánh signed
     input logic [31:0] data_1, data_2,  // Các giá trị so sánh
     output logic BrEq, BrLt       // Kết quả so sánh
