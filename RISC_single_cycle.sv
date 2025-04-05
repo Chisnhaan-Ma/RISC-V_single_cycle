@@ -1,8 +1,7 @@
-module RISC_single_cycle(input logic clk);
+module RISC_single_cycle(input logic clk, input logic reset);
 	///CPU signal///
 	logic[31:0]PC_in;
 	logic[31:0]PC_out;
-	logic	PC_WE;
 	logic [31:0]inst;
 	logic [4:0]inst_rsw;
 	logic [4:0]inst_rs1;
@@ -30,14 +29,20 @@ module RISC_single_cycle(input logic clk);
 	logic [2:0]load_type;
 	logic [31:0]load_result;
 	//Module instance//
-	PC 				PC_instance (.clk(clk),.data_in(PC_in),.data_out(PC_out),.Write_enable(PC_WE));
-	IMEM				IMEM_instance (.addr(PC_out),.inst(inst));
-	regfile 		   regfile_instance (.clk(clk),.data_W(WBSel_out),.rsW(inst_rsw),.rs1(inst_rs1),.rs2(inst_rs2),.data_1(data_1),.data_2(data_2),.regWEn(regWEn));
+	PC PC_instance (.clk(clk), .reset(reset), .data_in(PC_in), .data_out(PC_out));
+IMEM IMEM_instance( 
+  .addr(PC_out), 
+  .inst(inst),
+  .inst_rsw(inst_rsw),
+  .inst_rs1(inst_rs1),
+  .inst_rs2(inst_rs2)
+);
+	regfile 		   regfile_instance (.clk(clk),.data_W(WBSel_out),.rsW(inst_rsw),.rs1(inst_rs1),.rs2(inst_rs2),.data_1(data_1),.data_2(data_2),.regWEn(regWEn),.reset(reset));
 	ALU 				ALU_instance (.A(ALU_A),.B(ALU_B),.ALU_out(ALU_out),.ALU_sel(ALU_sel));
 	Imm_Gen  		Imm_Gen_instance (.Imm_out(Imm_out),.Imm_Sel(Imm_Sel),.inst(inst));
 	DMEM 				DMEM_instance (.addr(ALU_out),.clk(clk),.MemRW(MemRW),.dataW(data_2),.dataR(dataR_DMEM));
 	Add_Sub_32bit 	PC_add4 (.A(PC_out),.B(32'd4),.Sel(1'b0),.Result(PC_add4_out));
-	MUX4to1			Writeback (.sel(WBSel),.in0(load_result),.in1(ALU_out),.in2(PC_add4_out),.out(WBSel_out));
+  MUX4to1			Writeback (.sel(WBSel),.in0(load_result),.in1(ALU_out),.in2(PC_add4_out),.in3(32'b0),.out(WBSel_out));
 	brc brc_instance (.BrUn(BrUn),.data_1(data_1),.data_2(data_2),.BrLt(BrLt),.BrEq(BrEq));
 	Control_unit 	Control_unit_instance (.inst(inst),.BrEq(BrEq),.BrLt(BrLt),.PCSel(PCSel),.Imm_Sel(Imm_Sel),.regWEn(regWEn),.BrUn(BrUn),.Asel(Asel),.Bsel(Bsel),.ALU_sel(ALU_sel),.MemRW(MemRW),.WBSel(WBSel),.load_type(load_type));
 	Load_encode 	Load_encode_instance (.load_data(dataR_DMEM),.load_type(load_type),.load_result(load_result));
@@ -229,21 +234,24 @@ module Control_unit(
 	end
 endmodule
 /////////Program Counter//////////////////////
-module PC(
-	input logic clk,
-	input logic [31:0]data_in,
-	input logic Write_enable,
-	output logic [31:0]data_out);
-	
-always_ff @(posedge clk) begin
-	if(Write_enable) data_out <= data_in;
-	else data_out <= data_out;
-end
+module PC (
+  input logic clk,
+  input logic reset,
+  input logic [31:0] data_in,
+  output logic [31:0] data_out
+);
+  always_ff @(posedge clk or posedge reset) begin
+    if (reset)
+      data_out <= 0;
+    else 
+      data_out <= data_in;
+  end
 endmodule
+
 
 //////////Register File ///////////////////////
 module regfile(
-	input logic clk, regWEn,
+	input logic clk, regWEn, reset,
 	input logic [31:0]data_W,
 	input logic [4:0]rsW,
 	input logic [4:0]rs1,
@@ -253,14 +261,20 @@ module regfile(
 	);
 	logic [31:0]reg_mem[31:0];
 	
-	always_ff @(posedge clk) begin
-		if(regWEn && rsW != 5'd0)
-			reg_mem[rsW] <= data_W;
-		else reg_mem[0] <= 32'b0;
 	
+	always_ff @(posedge clk or posedge reset) begin
+      if (reset) begin
+            for (int i = 1; i < 32; i++) begin
+                reg_mem[i] <= 32'b0;  // Đặt tất cả các thanh ghi còn lại về 0
+            end
+		end
+		else if(regWEn) reg_mem[rsW] <= data_W;
+		else reg_mem[rsW] <= reg_mem[rsW];
+		
 	end
-	assign data_1 = reg_mem[rs1];
-	assign data_2 = reg_mem[rs2];
+	assign data_1 = (rs1 == 5'd0) ? 32'b0 : reg_mem[rs1];
+	assign data_2 = (rs2 == 5'd0) ? 32'b0 : reg_mem[rs2];
+	
 	
 endmodule
 
