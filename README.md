@@ -1,1 +1,1 @@
-![Single cycle datapath](https://github.com/user-attachments/assets/5c9b7640-edad-4708-9ec8-cc0f049dddac)
+![Datapath](https://github.com/user-attachments/assets/421dca46-a85c-4673-b429-88ebb4c1f251)
