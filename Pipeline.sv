@@ -1,8 +1,9 @@
 module Pipeline(
     input logic clk,
-    input logic reset
+    input logic reset,
+    output logic [31:0]Write_scoreboard,
+    output logic [4:0]rsw_scoreboard
 );
-
     // Wires for interstage connections
     logic [31:0] PC_ID, inst_ID;
     logic [31:0] WBSel_out;
@@ -74,6 +75,7 @@ module Pipeline(
 		.rs1_ID(rs1_ID),
 		.rs2_ID(rs2_ID),
         .flush(flush),
+        .Stall(Stall),
         .Asel_EX(Asel_EX),
         .Bsel_EX(Bsel_EX)
     );
@@ -174,6 +176,8 @@ module Pipeline(
     .PCSel(PCSel),
     .flush(flush)
     );
+    assign Write_scoreboard = WBSel_out;
+    assign rsw_scoreboard = rsW;
 endmodule
 
 module branch_taken (
@@ -231,6 +235,7 @@ module forward_control(
     input logic regWEn_WB,
     output logic [1:0]forwardA_EX,
     output logic [1:0]forwardB_EX
+   // output logic forward_store_EX
 );
     logic [6:0] opcode_EX;
     logic [4:0] rs1_EX, rs2_EX;
@@ -239,7 +244,13 @@ module forward_control(
     assign rs1_EX = inst_EX_fwd[19:15];
     assign rs2_EX = inst_EX_fwd[24:20];
 
-    always_comb begin
+    always @ (*) begin
+
+        if(inst_EX_fwd[6:0] == 7'b0100011) begin
+            forwardB_EX = 2'b00;
+            forwardA_EX = 2'b00;
+        end
+        else begin
         // Forward A
         if ((rd_MEM != 5'd0) && (rd_MEM == rs1_EX)&&(regWEn_MEM))
             forwardA_EX = 2'b01;  // Forward từ MEM
@@ -253,6 +264,8 @@ module forward_control(
         else if ((rd_WB != 5'd0) && (rd_WB == rs2_EX)&&(regWEn_WB))
             forwardB_EX = 2'b10;  // Forward từ WB
 		else forwardB_EX = 2'b00;
+        end
+
     end
 endmodule
 module Writeback_cycle(
@@ -553,6 +566,7 @@ module Decode_cycle(
 	 
 	// flush
     input logic flush,
+    input logic Stall,
 
     // Output tới Ex giá trị PC và inst
     output logic [31:0] PC_EX,
@@ -637,13 +651,13 @@ module Decode_cycle(
         .Imm_out(Imm_out)
     );
 
-    always_ff @(posedge clk or negedge reset or posedge flush) begin
+    always_ff @(posedge clk or negedge reset) begin
         if (!reset || flush) begin
             Imm_out_reg   <= 32'b0;
             data_1_reg    <= 32'b0;
             data_2_reg    <= 32'b0;
             PC_reg        <= 32'b0;
-            inst_reg      <= 32'h00000013; // Lệnh NOP
+            inst_reg      <= 32'h00000013; // NOP
             ALU_sel_reg   <= 4'b0;
             BrUn_reg      <= 1'b0;
             MemRW_reg     <= 1'b0;
@@ -652,21 +666,23 @@ module Decode_cycle(
             regWEn_reg    <= 1'b0;
             Asel_reg      <= 1'b0;
             Bsel_reg      <= 1'b0;
-		  end
-        else begin
-            Imm_out_reg <= Imm_out;
-            data_1_reg <= data_1;
-            data_2_reg <= data_2;
-            PC_reg <= PC_ID;
-            inst_reg <= inst_ID;
-            ALU_sel_reg <= ALU_sel;
-            BrUn_reg <= BrUn;
-            MemRW_reg <= MemRW;
+        end else if (Stall) begin
+            // Khi stall: Giữ lại toàn bộ dữ liệu cũ, nhưng chèn NOP
+            inst_reg <= 32'h00000013; // chỉ thay đổi instruction
+        end else begin
+            Imm_out_reg   <= Imm_out;
+            data_1_reg    <= data_1;
+            data_2_reg    <= data_2;
+            PC_reg        <= PC_ID;
+            inst_reg      <= inst_ID;
+            ALU_sel_reg   <= ALU_sel;
+            BrUn_reg      <= BrUn;
+            MemRW_reg     <= MemRW;
             load_type_reg <= load_type;
-            WBSel_reg <= WBSel;
-            regWEn_reg <= regWEn;
-            Asel_reg <= Asel;
-            Bsel_reg <= Bsel;
+            WBSel_reg     <= WBSel;
+            regWEn_reg    <= regWEn;
+            Asel_reg      <= Asel;
+            Bsel_reg      <= Bsel;
         end
     end
 
@@ -698,8 +714,8 @@ module Fetch_cycle (
     input logic [31:0] ALU_out_MEM,  // địa chỉ nhảy từ Execute
 	
 	 // Stall, flush
-	 input logic Stall,
-	 input logic flush,
+	input logic Stall,
+	input logic flush,
 	 
     // Output to Decode
     output logic [31:0] PC_ID,
@@ -738,19 +754,23 @@ module Fetch_cycle (
         .addr(PC_out),
         .inst(inst)
     );
-
     // Pipeline register IF/ID
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin
             inst_reg <= 32'b0;
             PC_reg <= 32'b0;
-        end else if (!Stall) begin
+        end else begin
             if (flush) begin
-                inst_reg <= 32'h00000013; // Lệnh NOP
-            end else begin
+                inst_reg <= 32'h00000013; // NOP khi flush
+            end 
+            else begin
                 inst_reg <= inst;
             end
-            PC_reg <= PC_out; // PC vẫn cập nhật để không bị mất đồng bộ
+
+            if (!Stall) begin
+                PC_reg <= PC_out; // Chỉ cập nhật PC nếu không stall
+            end
+            else inst_reg <= inst_reg;
         end
     end
 
@@ -961,6 +981,7 @@ module PC (
             data_out <= 32'b0;
         else if (enable)
             data_out <= data_in;
+       // else data_out <= 32'h00000013;
     end
 endmodule
 
