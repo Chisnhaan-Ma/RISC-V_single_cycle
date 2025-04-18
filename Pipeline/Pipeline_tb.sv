@@ -118,15 +118,8 @@ initial begin
       $display("FAILED At %d", $time);
   end
 
-    #10
-    #10
-    #10
-    #10
-    #10
-    #10
-
     $display("START TEST STORE AND LOAD");
-
+#20 // 2 SW instruction
     #10 begin 
     if (rsw_scoreboard == 18 && Write_scoreboard == (32'h12345000 + 12'h7ff)) 
       $display("At %d PASSED SW & LW", $time);
@@ -139,7 +132,6 @@ initial begin
       $display("At %d PASSED LB", $time);
     else 
       $display("FAILED At %d", $time);
-      //$display("End Load_type and forwarding");
   end
   
     #10 begin 
