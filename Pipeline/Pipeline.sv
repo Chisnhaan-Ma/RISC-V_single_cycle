@@ -41,6 +41,7 @@ module Pipeline(
 	logic Stall, flush;
 	logic [4:0] rs1_ID, rs2_ID;
     logic [1:0] Branch_fwd_A_EX,Branch_fwd_B_EX;
+    logic [1:0] forward_store_EX;
     // Instantiate Fetch
     Fetch_cycle fetch_inst (
         .clk(clk),
@@ -114,7 +115,8 @@ module Pipeline(
         .Asel_EX(Asel_EX),
         .Bsel_EX(Bsel_EX),
         .Branch_fwd_A_EX(Branch_fwd_A_EX),
-        .Branch_fwd_B_EX(Branch_fwd_B_EX)
+        .Branch_fwd_B_EX(Branch_fwd_B_EX),
+        .forward_store_EX(forward_store_EX)
     );
 
     // Instantiate Memory
@@ -153,7 +155,7 @@ module Pipeline(
         .reg_file_wb_enable(reg_file_wb_enable),
 		.rd_WB(rd_WB)
     );
-	forward_control fwd(
+	forward_control forward(
         .inst_EX_fwd(inst_EX),
         .rd_MEM(rd_MEM),
         .rd_WB(rd_WB),
@@ -162,7 +164,8 @@ module Pipeline(
         .forwardA_EX(forwardA_EX),
         .forwardB_EX(forwardB_EX),
         .Branch_fwd_A_EX(Branch_fwd_A_EX),
-        .Branch_fwd_B_EX(Branch_fwd_B_EX)
+        .Branch_fwd_B_EX(Branch_fwd_B_EX),
+        .forward_store_EX(forward_store_EX)
 	);
 	
 	hazard_detection_load fix_load (
@@ -242,11 +245,11 @@ module forward_control(
     input logic [4:0]rd_WB,
     input logic regWEn_MEM,
     input logic regWEn_WB,
-    output logic [1:0]forwardA_EX,
-    output logic [1:0]forwardB_EX,
-    output logic [1:0]Branch_fwd_A_EX, 
-    output logic [1:0]Branch_fwd_B_EX
-   // output logic forward_store_EX
+    output logic [1:0] forwardA_EX,
+    output logic [1:0] forwardB_EX,
+    output logic [1:0] Branch_fwd_A_EX, 
+    output logic [1:0] Branch_fwd_B_EX,
+    output logic [1:0] forward_store_EX
 );
     logic [6:0] opcode_EX;
     logic [4:0] rs1_EX, rs2_EX;
@@ -260,25 +263,30 @@ module forward_control(
         if(inst_EX_fwd[6:0] == 7'b0100011 ) begin
             forwardB_EX = 2'b00;
             forwardA_EX = 2'b00;
+            if ((rd_MEM != 5'd0) && (rd_MEM == rs2_EX)&&(regWEn_MEM))
+                forward_store_EX = 2'b01;  // Forward từ MEM
+            else if ((rd_WB != 5'd0) && (rd_WB == rs2_EX)&&(regWEn_WB))
+                forward_store_EX = 2'b10;  // Forward từ WB
+            else forward_store_EX = 2'b00;   
         end
         else begin
-
-        // Forward A ALU
-        if ((rd_MEM != 5'd0) && (rd_MEM == rs1_EX)&&(regWEn_MEM))
-            forwardA_EX = 2'b01;  // Forward từ MEM
-        else if ((rd_WB != 5'd0) && (rd_WB == rs1_EX)&&(regWEn_WB))
-            forwardA_EX = 2'b10;  // Forward từ WB
-		else forwardA_EX = 2'b00;
-        
-        // Forward B ALU
-        if ((rd_MEM != 5'd0) && (rd_MEM == rs2_EX)&&(regWEn_MEM))
-            forwardB_EX = 2'b01;  // Forward từ MEM
-        else if ((rd_WB != 5'd0) && (rd_WB == rs2_EX)&&(regWEn_WB))
-            forwardB_EX = 2'b10;  // Forward từ WB
-		else forwardB_EX = 2'b00;
+            forward_store_EX = 2'b00;
+            // Forward A ALU
+            if ((rd_MEM != 5'd0) && (rd_MEM == rs1_EX)&&(regWEn_MEM))
+                forwardA_EX = 2'b01;  // Forward từ MEM
+            else if ((rd_WB != 5'd0) && (rd_WB == rs1_EX)&&(regWEn_WB))
+                forwardA_EX = 2'b10;  // Forward từ WB
+            else forwardA_EX = 2'b00;
+            
+            // Forward B ALU
+            if ((rd_MEM != 5'd0) && (rd_MEM == rs2_EX)&&(regWEn_MEM))
+                forwardB_EX = 2'b01;  // Forward từ MEM
+            else if ((rd_WB != 5'd0) && (rd_WB == rs2_EX)&&(regWEn_WB))
+                forwardB_EX = 2'b10;  // Forward từ WB
+            else forwardB_EX = 2'b00;
         end
 
-        if(inst_EX_fwd[6:0] == 7'b1100011 ) begin
+        if(inst_EX_fwd[6:0] == 7'b1100011 ) begin //B type
             forwardB_EX = 2'b00;
             forwardA_EX = 2'b00;
             // Forward A Branch
@@ -294,8 +302,11 @@ module forward_control(
             else if ((rd_WB != 5'd0) && (rd_WB == rs2_EX)&&(regWEn_WB))
                 Branch_fwd_B_EX = 2'b10;  // Forward từ WB
             else  Branch_fwd_B_EX = 2'b00;
-
         end
+        else begin
+            Branch_fwd_B_EX = 2'b00;
+            Branch_fwd_A_EX = 2'b00;
+        end    
 
     end
 endmodule
@@ -456,6 +467,7 @@ module Execute_cycle(
     input logic [1:0] forwardB_EX,
     input logic [1:0] Branch_fwd_A_EX, 
     input logic [1:0] Branch_fwd_B_EX,
+    input logic [1:0] forward_store_EX,
 
     // Data forwarding từ MEM và WriteBack
     input logic [31:0] ALU_out_MEM_fwd,
@@ -495,6 +507,7 @@ module Execute_cycle(
     logic regWEn_reg;
     logic [31:0] Asel_out, Bsel_out;
     logic [31:0]Branch1_out, Branch2_out;
+    logic [31:0]data_2_fwd;
     assign inst_EX_fwd = inst_EX;
 
     // Forwarding multiplexers
@@ -532,6 +545,15 @@ module Execute_cycle(
         .in2(WBSel_out_WB_fwd),
         .in3(32'b0),
         .out(Branch2_out)
+    );
+
+    MUX4to1 store_forward (
+        .sel(forward_store_EX),
+        .in0(data_2_EX),
+        .in1(ALU_out_MEM_fwd),
+        .in2(WBSel_out_WB_fwd),
+        .in3(32'b0),
+        .out(data_2_fwd)
     );
 
     Mux2to1 Op_A(
@@ -593,7 +615,7 @@ module Execute_cycle(
 		else begin
             PC_reg <= PC_EX;
             inst_reg <= inst_EX;
-            data_2_reg <= data_2_EX;
+            data_2_reg <= data_2_fwd;
             ALU_reg <= ALU_result;
             MemRW_reg <= MemRW_EX;
             load_type_reg <= load_type_EX;
@@ -1088,10 +1110,11 @@ module regfile(
 		else if(regWEn) reg_mem[rsW] <= data_W;
 		else reg_mem[rsW] <= reg_mem[rsW];
 	end
-	assign data_1 = (rs1 == 5'd0) ? 32'b0 : reg_mem[rs1];
-	assign data_2 = (rs2 == 5'd0) ? 32'b0 : reg_mem[rs2];
-	
-	
+    always_comb begin
+        data_1 = (rs1 == 5'd0) ? 32'b0 : reg_mem[rs1];
+        data_2 = (rs2 == 5'd0) ? 32'b0 : reg_mem[rs2];
+    end
+
 endmodule
 
 ///////Instruction Memory ////////////////////////	
