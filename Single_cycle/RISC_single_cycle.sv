@@ -619,20 +619,24 @@ module SLT_SLTU (
     logic carry_out;        // Carry/Borrow từ phép trừ
 
     Add_Sub_32bit SUB(
-	 .A(A),
-	 .B(B), 
-	 .Sel(1'b1), 
-	 .Result(diff_out),
-	 .Cout(carry_out));
+        .A(A),
+        .B(B), 
+        .Sel(1'b1), 
+        .Result(diff_out),
+        .Cout(carry_out)
+    );
 
+    // So sánh
     always @(*) begin
-        case (Sel)
-            1'b0: Result = {31'b0, (A[31] & ~B[31]) | (~(A[31] ^ B[31]) & diff_out[31])}; // SLT (có dấu)
-            1'b1: Result = {31'b0, ~carry_out};  // SLTU (không dấu)
-            default: Result = 32'b0; 
-        endcase
+        if (Sel == 1'b0) begin // SLT
+            Result = diff_out[31];  
+        end else begin //SLTU
+            Result = ~carry_out;
+        end
     end
+
 endmodule
+
 	
 module ALU(
     input  logic [3:0]  ALU_sel, // Chọn phép tính
@@ -731,7 +735,6 @@ module brc (
     logic [31:0] Diff;  // Kết quả phép trừ rs1 - rs2
     logic Cout;         // Carry-out từ Add_Sub_32bit
 
-    // Gọi module Add_Sub_32bit để thực hiện rs1 - rs2
     Add_Sub_32bit subtractor (
         .A(data_1),
         .B(data_2),
@@ -740,7 +743,7 @@ module brc (
         .Cout(Cout)
     );
 
-    // So sánh bằng nhau (BrEq = 1 nếu Diff == 0)
+    // BrEq
     always @(*) begin
         if (Diff == 32'b0)
             BrEq = 1'b1;
@@ -748,7 +751,7 @@ module brc (
             BrEq = 1'b0;
     end
 
-    // So sánh nhỏ hơn (BrLt)
+    // BrLt
     always @(*) begin
         if (BrUn)  // Unsigned
             BrLt = ~Cout;
